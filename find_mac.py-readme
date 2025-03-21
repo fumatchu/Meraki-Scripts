@@ -1,0 +1,35 @@
+
+Python Version: Python 3.7 or later
+Required API Access:
+
+
+A Meraki API Key with read permissions on organizations, networks, and devices.
+The API Key must be associated with a Meraki dashboard account.
+
+
+This script requires the meraki Python SDK.
+Package Purpose
+meraki Cisco Meraki API SDK for querying the dashboard
+os Environment variable handling for API keys
+time Used for delays and polling logic
+datetime Converts timestamps from API responses
+
+
+Install Python 3 and pip 3
+
+
+you can set your API key in the script export MERAKI_API_KEY="your_meraki_api_key"
+
+
+But this is a security concern so I also provided the option to prompt you 
+
+
+Once you have your Python setup run:
+python3 find_mac.py
+
+
+The script prompts for your Meraki API Key if not set.
+It lists available Meraki Organizations and asks which one to search in (if more than one).
+Enter a MAC address to look up.
+The script finds the network, device (switch/AP), and details.
+It asks if you want to search another MAC or exit.
