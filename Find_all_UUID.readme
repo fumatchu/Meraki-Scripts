@@ -3,8 +3,6 @@ Requirements
 1. Python 3
 Check version:
 •	python3 --version
-If not installed (Rocky/RHEL):
-•	sudo dnf install -y python3
 2. Python requests library
 If pip not installed:
 •	sudo dnf install -y python3-pip
