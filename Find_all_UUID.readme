@@ -1,0 +1,41 @@
+Meraki UUID Client Scanner – Requirements & Usage
+Requirements
+1. Python 3
+Check version:
+•	python3 --version
+If not installed (Rocky/RHEL):
+•	sudo dnf install -y python3
+2. Python requests library
+If pip not installed:
+•	sudo dnf install -y python3-pip
+Install requests:
+•	python3 -m pip install --upgrade pip
+•	python3 -m pip install requests
+3. Save the script as find_uuid_clients.py and make executable:
+•	chmod +x find_uuid_clients.py
+How to Run
+Basic interactive mode (prompts for API key, mode, and org):
+•	python3 find_uuid_clients.py
+Modes
+UUID only (strict UUID hostnames):
+•	python3 find_uuid_clients.py --mode uuid
+UUID + suspicious (UUID, long hex, blank names):
+•	python3 find_uuid_clients.py --mode suspicious
+Useful Switches
+--api-key : Provide Meraki API key directly
+•	python3 find_uuid_clients.py --api-key YOUR_API_KEY_HERE
+--org : Specify organization name
+•	python3 find_uuid_clients.py --org "My Org Name"
+--timespan : Set lookback in seconds (default 604800 for 7 days)
+•	python3 find_uuid_clients.py --timespan 86400
+--out : Output CSV filename (default meraki_uuid_clients.csv)
+•	python3 find_uuid_clients.py --out my_uuid_report.csv
+--no-interactive : Disable prompts (for automation)
+•	python3 find_uuid_clients.py --no-interactive
+Examples
+Interactive (choose everything from menus):
+•	python3 find_uuid_clients.py
+Non-interactive UUID-only:
+•	python3 find_uuid_clients.py --api-key YOUR_API_KEY --mode uuid --no-interactive --out uuid_only_clients.csv
+Non-interactive suspicious mode for specific org:
+•	python3 find_uuid_clients.py --api-key YOUR_API_KEY --org "My Lab Org" --mode suspicious --timespan 86400 --no-interactive --out suspicious_clients_24h.csv
