@@ -12,19 +12,27 @@ Features:
         - Break stack in source network
         - Move all members to destination network
         - Restore ports + link aggregation groups
-        - Recreate stack in destination network
+        - Recreate stack in destination network (or detect auto-created stack)
       * If not, just move the single switch
+  - Batch mode:
+      * Select multiple switches in a source network
+      * Detect stacks automatically and move full stacks if any member is selected
+      * Use a single destination org/network for the entire batch
   - Backup switch config (device + ports + link aggregations) to JSON
   - Select destination org
   - Either select an existing destination network OR create a new switch-only network
   - Move the switch/stack to the destination network
-  - Restore switch port configuration + link aggregations
+  - Restore:
+      * Device metadata (name, tags, physical address, notes, lat/lng)
+      * Switch port configuration
+      * Link aggregation groups
+  - Colorized console output + mirrored logs to ./logs/move_YYYY-MM-DD_HH-MM-SS.log
 
 Prereqs:
     pip install meraki
 
 Usage:
-    python3 meraki_switch_move.py
+    python3 switch_migration.py
 """
 
 import os
@@ -70,7 +78,6 @@ def log_print(*args, **kwargs):
       - prints to stdout (with colors)
       - writes a stripped version to LOG_FILE (if initialized)
     """
-    # Render text the same way print would
     sep = kwargs.get("sep", " ")
     end = kwargs.get("end", "\n")
     text = sep.join(str(a) for a in args)
@@ -225,7 +232,7 @@ def is_movable_switch(device: dict) -> bool:
     # Is it "switch-ish" at all?
     is_switch_family = (
         ptype == "switch"
-        or model.startswith(("C92", "C93", "C94", "C95", "C96", "C97", "C98", "C99"))
+        or model.startswith(("C92", "C93", "C94", "C95", "C96"))
     )
     if not is_switch_family:
         return False
@@ -276,6 +283,101 @@ def select_switch_in_network(dashboard, network_id):
     )
 
 
+def select_multiple_switches_in_network(dashboard, network_id):
+    """
+    Let the user pick multiple switches from a network (by index, ranges, or 'all').
+    Returns a list of device dicts.
+    """
+    devices = dashboard.networks.getNetworkDevices(network_id)
+
+    if not devices:
+        error("No devices found in this network at all.")
+        sys.exit(1)
+
+    switches = [d for d in devices if is_movable_switch(d)]
+
+    if not switches:
+        warn("\nNo eligible switch devices found in this network.")
+        print("Devices present (for reference):")
+        for d in devices:
+            print(
+                f"  name={d.get('name')!r}, "
+                f"serial={d.get('serial')}, "
+                f"model={d.get('model')}, "
+                f"productType={d.get('productType')}, "
+                f"firmware={d.get('firmware') or d.get('firmwareVersion')}"
+            )
+        print(f"\n{YELLOW}Note: This tool only moves:{RESET}")
+        print("  - Meraki MS switches, or")
+        print("  - Cloud-managed Catalyst switches NOT running IOS-XE.")
+        sys.exit(1)
+
+    header("Select one or more switches (batch mode)")
+    for idx, d in enumerate(switches, start=1):
+        print(
+            f"  [{idx}] {d.get('name') or '(no name)'} | "
+            f"serial={d.get('serial')} | model={d.get('model')}"
+        )
+
+    while True:
+        raw = input(
+            f"{YELLOW}Enter numbers (e.g. 1,2,5-7), 'all' for all, or 'q' to quit: {RESET}"
+        ).strip().lower()
+
+        if raw in ("q", "quit", "exit"):
+            warn("Aborted by user.")
+            sys.exit(0)
+
+        if raw == "all":
+            return switches
+
+        try:
+            indices = parse_index_list(raw, len(switches))
+        except ValueError as e:
+            warn(str(e))
+            continue
+
+        if not indices:
+            warn("No valid selections parsed; try again.")
+            continue
+
+        return [switches[i - 1] for i in sorted(indices)]
+
+
+def parse_index_list(s: str, max_index: int):
+    """
+    Parse a string like "1,2,5-7" into a set of 1-based indices.
+    Raises ValueError for invalid input.
+    """
+    indices = set()
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if not parts:
+        raise ValueError("Empty selection.")
+
+    for part in parts:
+        if "-" in part:
+            start_str, end_str = part.split("-", 1)
+            if not (start_str.isdigit() and end_str.isdigit()):
+                raise ValueError(f"Invalid range: {part}")
+            start = int(start_str)
+            end = int(end_str)
+            if start > end:
+                raise ValueError(f"Invalid range (start > end): {part}")
+            if start < 1 or end > max_index:
+                raise ValueError(f"Range out of bounds: {part}")
+            for i in range(start, end + 1):
+                indices.add(i)
+        else:
+            if not part.isdigit():
+                raise ValueError(f"Invalid index: {part}")
+            idx = int(part)
+            if idx < 1 or idx > max_index:
+                raise ValueError(f"Index out of bounds: {part}")
+            indices.add(idx)
+
+    return indices
+
+
 def detect_switch_stack(dashboard, network_id: str, serial: str):
     """
     Return the switch stack dict the serial belongs to, or None.
@@ -292,6 +394,46 @@ def detect_switch_stack(dashboard, network_id: str, serial: str):
             return stack
 
     return None
+
+
+def build_move_plan_for_selection(dashboard, network_id: str, devices):
+    """
+    Given a set of selected devices in a network, decide which stacks
+    and which standalone switches will be moved.
+
+    Returns:
+        stacks_to_move:  [stack_dict, ...]
+        singles_to_move: [device_dict, ...]
+    """
+    selected_serials = {d["serial"] for d in devices}
+    handled_serials = set()
+    stacks_to_move = []
+    singles_to_move = []
+
+    for d in devices:
+        serial = d["serial"]
+        if serial in handled_serials:
+            continue
+
+        stack = detect_switch_stack(dashboard, network_id, serial)
+        if stack:
+            stack_serials = set(stack.get("serials") or [])
+            # Mark all members as handled
+            handled_serials.update(stack_serials)
+            stacks_to_move.append(stack)
+
+            # If some stack members weren't in the explicit selection, let the user know.
+            missing = stack_serials - selected_serials
+            if missing:
+                warn(
+                    f"Stack '{stack.get('name')}' has additional members not explicitly "
+                    f"selected: {', '.join(sorted(missing))}. Moving the full stack."
+                )
+        else:
+            singles_to_move.append(d)
+            handled_serials.add(serial)
+
+    return stacks_to_move, singles_to_move
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -399,7 +541,7 @@ def backup_stack_config(dashboard, network_id: str, stack: dict, backup_dir="bac
     member_set = set(serials)
     stack_link_aggs = []
     for lag in all_link_aggs:
-        ports = lag.get("switchPorts", [])
+        ports = lag.get("switchPorts") or []
         if any(sp.get("serial") in member_set for sp in ports):
             stack_link_aggs.append(lag)
 
@@ -487,6 +629,159 @@ def restore_switch_link_aggregations(dashboard, network_id: str, label: str, lin
         f"Link aggregation restore for {label}: "
         f"{GREEN}{created} created{RESET}, {RED}{failures} failed{RESET}."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Device metadata (name / tags / physical address / notes / lat/lng)
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEVICE_META_FIELDS = ("name", "tags", "address", "notes", "lat", "lng")
+
+
+def _get_common_dest_address(dashboard, network_id: str):
+    """
+    Look at all devices in the destination network and determine the
+    most common non-empty address (and its lat/lng if present).
+
+    Returns:
+        {
+          "address": "123 Main St, City, ST",
+          "count": 5,
+          "lat": 33.123,
+          "lng": -84.55,
+        }
+        or None if no addresses were found.
+    """
+    try:
+        devices = dashboard.networks.getNetworkDevices(network_id)
+    except APIError as e:
+        warn(f"Could not inspect destination network devices for address: {e}")
+        return None
+
+    addr_map = {}
+    for d in devices:
+        addr = (d.get("address") or "").strip()
+        if not addr:
+            continue
+        key = addr.lower()
+        if key not in addr_map:
+            addr_map[key] = {
+                "address": addr,
+                "count": 0,
+                "lat": d.get("lat"),
+                "lng": d.get("lng"),
+            }
+        addr_map[key]["count"] += 1
+
+    if not addr_map:
+        return None
+
+    # Pick the most common address
+    return max(addr_map.values(), key=lambda x: x["count"])
+
+
+def choose_address_for_device(
+    dashboard,
+    dst_net_id: str,
+    backup_device: dict,
+    addr_cache: dict | None = None,
+):
+    """
+    Decide which physical (mailing) address to use for a device being moved:
+
+      - Source address: from backup_device["address"]
+      - Destination "standard" address: most common address among devices
+        already in the destination network.
+
+    For stacks, addr_cache is used to remember the first choice and
+    apply it to all members without prompting again.
+    """
+    src_addr = (backup_device.get("address") or "").strip()
+
+    # If the source device has no address, just return as-is.
+    if not src_addr:
+        return backup_device
+
+    dest_common = _get_common_dest_address(dashboard, dst_net_id)
+    if not dest_common:
+        # No meaningful address pattern in destination network – keep source.
+        return backup_device
+
+    dest_addr = dest_common["address"].strip()
+
+    # If they match (case-insensitive), nothing to decide.
+    if dest_addr.lower() == src_addr.lower():
+        return backup_device
+
+    # If we have a cache and a mode, reuse it.
+    if addr_cache is not None and "mode" in addr_cache:
+        mode = addr_cache["mode"]
+        if mode == "source":
+            return backup_device
+        # mode == "dest"
+        new_dev = dict(backup_device)
+        new_dev["address"] = addr_cache["dest_address"]
+        if addr_cache.get("lat") is not None:
+            new_dev["lat"] = addr_cache["lat"]
+        if addr_cache.get("lng") is not None:
+            new_dev["lng"] = addr_cache["lng"]
+        return new_dev
+
+    # Otherwise, prompt user which one to use.
+    header("Physical address selection for moved device")
+    print(f"  Source device address:      {src_addr}")
+    print(f"  Common address in DEST net: {dest_addr} (on {dest_common['count']} device(s))")
+    choice = input(
+        f"{YELLOW}Use which address? [1] Source  [2] Destination (default): {RESET}"
+    ).strip()
+
+    if choice == "1":
+        info("Keeping source device address.")
+        if addr_cache is not None:
+            addr_cache["mode"] = "source"
+        return backup_device
+
+    # Use destination network's common address (and its lat/lng if present)
+    info("Using destination network's common address for this device.")
+    new_dev = dict(backup_device)
+    new_dev["address"] = dest_addr
+    if dest_common.get("lat") is not None:
+        new_dev["lat"] = dest_common["lat"]
+    if dest_common.get("lng") is not None:
+        new_dev["lng"] = dest_common["lng"]
+
+    if addr_cache is not None:
+        addr_cache["mode"] = "dest"
+        addr_cache["dest_address"] = dest_addr
+        addr_cache["lat"] = dest_common.get("lat")
+        addr_cache["lng"] = dest_common.get("lng")
+
+    return new_dev
+
+
+def restore_device_metadata(dashboard, serial: str, device_obj: dict):
+    """
+    Restore high-level device metadata (name, tags, address, notes, lat/lng)
+    onto a device in its *current* network.
+    """
+    body = {}
+    for field in DEVICE_META_FIELDS:
+        value = device_obj.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        body[field] = value
+
+    if not body:
+        return
+
+    header(f"Restoring device metadata for {serial}")
+    try:
+        dashboard.devices.updateDevice(serial, **body)
+        success(f"Device metadata updated for {serial}.")
+    except APIError as e:
+        warn(f"Could not update device metadata for {serial}: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -622,6 +917,11 @@ def move_switch_between_networks(
     info("Waiting a few seconds for the Dashboard to register the move...")
     time.sleep(5)
 
+    # Decide physical address / metadata for this device
+    chosen_device = choose_address_for_device(dashboard, dst_net_id, backup["device"], addr_cache=None)
+    restore_device_metadata(dashboard, serial, chosen_device)
+
+    # Ports + LAGs
     restore_switch_ports(dashboard, serial, backup["ports"])
 
     restore_switch_link_aggregations(
@@ -688,6 +988,14 @@ def move_stack_between_networks(
 
     info("Waiting a few seconds for the Dashboard to register the move...")
     time.sleep(5)
+
+    # Address / metadata choice — prompt ONCE, reuse for all stack members
+    addr_cache: dict = {}
+    header("Restoring device metadata on all stack members")
+    for serial in serials:
+        backup_dev = per_switch_backups[serial]["backup"]["device"]
+        chosen_dev = choose_address_for_device(dashboard, dst_net_id, backup_dev, addr_cache=addr_cache)
+        restore_device_metadata(dashboard, serial, chosen_dev)
 
     header("Restoring ports on all stack members")
     for serial in serials:
@@ -789,6 +1097,81 @@ def run_single_move(dashboard):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Batch workflow (multiple switches / stacks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_batch_move(dashboard):
+    header("Select SOURCE (batch mode)")
+    org_src = select_organization(dashboard)
+    net_src = select_network(dashboard, org_src["id"], prompt="Select SOURCE network")
+
+    selected_devices = select_multiple_switches_in_network(dashboard, net_src["id"])
+    if not selected_devices:
+        warn("No devices selected.")
+        return
+
+    stacks_to_move, singles_to_move = build_move_plan_for_selection(
+        dashboard, net_src["id"], selected_devices
+    )
+
+    header("Batch move plan")
+    if stacks_to_move:
+        print("Stacks to move:")
+        for s in stacks_to_move:
+            print(
+                f"  - {s.get('name')} (id={s.get('id')}), "
+                f"members: {', '.join(s.get('serials') or [])}"
+            )
+    else:
+        print("Stacks to move: (none)")
+
+    if singles_to_move:
+        print("Standalone switches to move:")
+        for d in singles_to_move:
+            print(
+                f"  - {d.get('name') or '(no name)'} | "
+                f"serial={d['serial']} | model={d['model']}"
+            )
+    else:
+        print("Standalone switches to move: (none)")
+
+    confirm = input(
+        f"{YELLOW}Proceed with this batch move? Type 'yes' to continue: {RESET}"
+    ).strip().lower()
+    if confirm != "yes":
+        warn("Batch move cancelled.")
+        return
+
+    org_dst, net_dst = choose_destination_org_and_network(dashboard, org_src, net_src)
+
+    # Move stacks first
+    for stack in stacks_to_move:
+        per_switch_backups, stack_link_aggs, stack_backup_path = backup_stack_config(
+            dashboard, net_src["id"], stack
+        )
+        success(f"Stack backup metadata file: {stack_backup_path}")
+        move_stack_between_networks(
+            dashboard,
+            org_src, net_src, stack,
+            org_dst, net_dst,
+            per_switch_backups,
+            stack_link_aggs,
+        )
+
+    # Then standalone switches
+    for device in singles_to_move:
+        serial = device["serial"]
+        backup, backup_path = backup_switch_config(dashboard, net_src["id"], serial)
+        success(f"Backup file: {backup_path}")
+        move_switch_between_networks(
+            dashboard,
+            org_src, net_src, device,
+            org_dst, net_dst,
+            backup,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main loop with API key reuse
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -813,9 +1196,20 @@ def main():
             suppress_logging=True,
         )
 
-        run_single_move(dashboard)
+        # Mode selection
+        header("Mode selection")
+        print("  [1] Move a single switch or stack")
+        print("  [2] Batch move multiple switches / stacks")
+        mode = input(f"{YELLOW}Select mode [1/2]: {RESET}").strip()
 
-        again = input(f"\n{YELLOW}Do you want to move another switch or stack? [y/N]: {RESET}").strip().lower()
+        if mode == "2":
+            run_batch_move(dashboard)
+        else:
+            run_single_move(dashboard)
+
+        again = input(
+            f"\n{YELLOW}Do you want to perform another move? [y/N]: {RESET}"
+        ).strip().lower()
         if again not in ("y", "yes"):
             success("Exiting. Have a good one.")
             break
