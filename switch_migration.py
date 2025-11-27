@@ -1211,7 +1211,7 @@ def main():
             f"\n{YELLOW}Do you want to perform another move? [y/N]: {RESET}"
         ).strip().lower()
         if again not in ("y", "yes"):
-            success("Exiting. Have a good one.")
+            success("Exiting...")
             break
 
         reuse = input(f"{YELLOW}Reuse the same API key? [Y/n]: {RESET}").strip().lower()
