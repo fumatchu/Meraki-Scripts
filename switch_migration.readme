@@ -1,0 +1,111 @@
+Meraki Switch / Stack Move Tool
+
+Python script to move Meraki MS or Cloud-Managed Catalyst (CS/C9X) switches — including full stacks — from one network to another while preserving:
+	•	Switchport configuration
+	•	Link aggregation groups (LACP)
+	•	Stack membership (auto-detect + recreate)
+	•	Full backups (per-switch + stack-level JSON)
+
+Supports:
+	•	Single switch moves
+	•	Entire stack moves
+	•	Cross-organization moves
+	•	Destination network creation
+	•	Auto-reusing API key across sessions
+	•	Colored terminal output
+
+⸻
+
+Features
+	•	Detect if a device is a stack member
+	•	Backup all port + LAG configuration
+	•	Break source stack (required by Meraki)
+	•	Move all members safely
+	•	Restore config in the destination network
+	•	Detect and validate auto-provisioned stacks
+	•	Recreate stack only if needed
+	•	Full JSON backups written to backups/
+	•	Safe, guided prompts
+	•	Optional reuse of API key
+
+⸻
+
+Installing Python 3.12 (Windows, macOS, Linux)
+
+This tool requires Python 3.12 or newer.
+
+Below are cross-platform instructions that work on any OS, and are formatted cleanly for GitHub.
+
+⸻
+
+macOS (Intel / Apple Silicon)
+
+Option A — Install via Homebrew (Recommended)
+brew install python@3.12
+brew link python@3.12
+
+Verify:
+python3.12 --version
+pip3.12 --version
+
+Windows (10 / 11)
+	1.	Download Python 3.12:
+https://www.python.org/downloads/windows/
+	2.	During installer setup:
+	•	Check Add Python to PATH
+	•	Ensure pip is enabled
+	3.	Verify installation:
+  python --version
+  pip --version
+
+
+Install Required Python Modules
+
+This script requires only the Meraki Dashboard API SDK:
+pip install meraki
+
+
+Place the script anywhere you like, then run:
+python3 switch_migration.py
+
+What the Script Actually Does (Flow)
+
+1️ Select Source Org & Network
+	•	Choose organization
+	•	Choose network
+	•	Choose device
+	•	Detect if it’s part of a stack
+
+2️ Backup Config
+
+Automatically backs up:
+	•	Device info
+	•	All switchports
+	•	All LAGs involving the switch
+	•	For stacks:
+	•	all members
+	•	stack metadata
+	•	consolidated JSON
+
+Move Workflow
+
+For single switches:
+	1.	Remove from source
+	2.	Claim into destination
+	3.	Restore ports
+	4.	Restore LAGs
+
+For stacks:
+	1.	Delete stack in source (required by Meraki)
+	2.	Remove all members
+	3.	Claim all devices to destination
+	4.	Restore ports
+	5.	Restore LAGs
+	6.	Auto-detect if Meraki already recreated stack
+	7.	If not, recreate stack
+
+Important Notes
+	•	Works for Meraki MS and cloud-managed Catalyst (C9xxx)
+	•	Does NOT work for IOS-XE monitoring mode (firmware contains “IOS XE”)
+	•	Requires full Dashboard API access
+	•	Destination network must have “switch” product type
