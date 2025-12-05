@@ -31,7 +31,8 @@ Features
 	•	Safe, guided prompts
 	•	Optional reuse of API key
     •	L3- Due to some API limitations and preferred uplink not being exposed, the script will attempt to move L3. 
-        But it may be unsuccessful for Routing ONLY (management IP will still move, thus, cloud connectivity stays intact) 
+        But it may be unsuccessful for ROUTING ONLY (management IP will still move, thus, cloud connectivity stays intact)
+        Keep this in mind as you move L3 switches
         If the switch has static routes, you may have to manually create L3 first, then the script will allow Route moves
 ⸻
 
