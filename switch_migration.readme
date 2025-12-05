@@ -112,6 +112,7 @@ For stacks:
 
 Important Notes
 	•	Works for Meraki MS and cloud-managed Catalyst (C9xxx)
-	•	Does NOT work for IOS-XE monitoring mode (firmware contains “IOS XE”)
+	•	Does NOT work for IOS-XE monitoring/hybrid/Configuration source: device mode (firmware is NATIVE “IOS XE”)
+        The script determines this will not include Configuration source: device as a move option
 	•	Requires full Dashboard API access
 	•	Destination network must have “switch” product type
