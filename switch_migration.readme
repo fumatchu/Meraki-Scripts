@@ -17,17 +17,22 @@ Supports:
 ⸻
 
 Features
+    •	Create new networks on the fly (Copies MGMNT VLAN, Storm control, Global STP, QOS, Multicast, firmware version checks)
 	•	Detect if a device is a stack member
 	•	Backup all port + LAG configuration
 	•	Break source stack (required by Meraki)
 	•	Move all members safely
 	•	Restore config in the destination network
+    •	Update physical mailing address (Google Maps) 
 	•	Detect and validate auto-provisioned stacks
 	•	Recreate stack only if needed
 	•	Full JSON backups written to backups/
+    •	Full Logging for each session
 	•	Safe, guided prompts
 	•	Optional reuse of API key
-
+    •	L3- Due to some API limitations and preferred uplink not being exposed, the script will attempt to move L3. 
+        But it may be unsuccessful for Routing ONLY (management IP will still move, thus, cloud connectivity stays intact) 
+        If the switch has static routes, you may have to manually create L3 first, then the script will allow Route moves
 ⸻
 
 Installing Python 3.12 (Windows, macOS, Linux)
